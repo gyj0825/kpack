@@ -13,136 +13,164 @@ import (
 	"github.com/buildpacks/lifecycle"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1"
+	"github.com/pkg/errors"
 	"github.com/theupdateframework/notary"
 	"github.com/theupdateframework/notary/client"
-	"github.com/theupdateframework/notary/client/changelist"
 	"github.com/theupdateframework/notary/cryptoservice"
 	"github.com/theupdateframework/notary/storage"
 	"github.com/theupdateframework/notary/trustmanager"
-	"github.com/theupdateframework/notary/trustpinning"
 	"github.com/theupdateframework/notary/tuf/data"
-
-	"github.com/pivotal/kpack/pkg/registry"
+	"github.com/theupdateframework/notary/tuf/signed"
 )
 
-type ImageSigner struct {
-	Logger *log.Logger
-	Client registry.Client
+type ImageFetcher interface {
+	Fetch(keychain authn.Keychain, repoName string) (v1.Image, string, error)
 }
 
-func (s *ImageSigner) Sign(serverURL, notarySecretDir, reportFilePath string, keychain authn.Keychain) error {
-	report := lifecycle.ExportReport{}
+type RepositoryFactory interface {
+	GetRepository(url string, gun data.GUN, remoteStore storage.RemoteStore, cryptoService signed.CryptoService) (Repository, error)
+}
+
+type Repository interface {
+	PublishTarget(target *client.Target) error
+}
+
+type ImageSigner struct {
+	Logger  *log.Logger
+	Client  ImageFetcher
+	Factory RepositoryFactory
+}
+
+func (s *ImageSigner) Sign(url, notarySecretDir, reportFilePath string, keychain authn.Keychain) error {
+	var report lifecycle.ExportReport
 	_, err := toml.DecodeFile(reportFilePath, &report)
 	if err != nil {
 		return err
 	}
 
-	// TODO : handle all tags
-	ref, err := name.ParseReference(report.Image.Tags[0], name.WeakValidation)
+	gun, targets, err := s.makeGUNAndTargets(report, keychain)
 	if err != nil {
 		return err
 	}
 
-	s.Logger.Printf("Pulling image '%s'\n", ref.Context().Name()+"@"+report.Image.Digest)
-	image, _, err := s.Client.Fetch(keychain, ref.Context().Name()+"@"+report.Image.Digest)
+	remoteStore, err := s.makeRemoteStore(url, gun)
 	if err != nil {
 		return err
 	}
 
-	imageSize, err := image.Size()
+	cryptoService, err := s.makeCryptoService(notarySecretDir)
 	if err != nil {
 		return err
 	}
 
-	digestBytes, err := hex.DecodeString(strings.TrimPrefix(report.Image.Digest, "sha256:"))
-	if err != nil {
-		return err
+	for _, target := range targets {
+		repo, err := s.Factory.GetRepository(url, gun, remoteStore, cryptoService)
+		if err != nil {
+			return err
+		}
+
+		err = repo.PublishTarget(target)
+		if err != nil {
+			return err
+		}
 	}
 
-	// TODO : name should be the tag of the image
-	target := &client.Target{
-		Name: "latest",
-		Hashes: map[string][]byte{
-			notary.SHA256: digestBytes,
-		},
-		Length: imageSize,
+	return nil
+}
+
+func (s *ImageSigner) makeGUNAndTargets(report lifecycle.ExportReport, keychain authn.Keychain) (data.GUN, []*client.Target, error) {
+	gun := data.GUN("")
+	var targets []*client.Target
+	for _, tag := range report.Image.Tags {
+		s.Logger.Printf("Signing tag '%s'\n", tag)
+		ref, err := name.ParseReference(tag, name.WeakValidation)
+		if err != nil {
+			return "", nil, err
+		}
+
+		s.Logger.Printf("Pulling image '%s'\n", ref.Context().Name()+"@"+report.Image.Digest)
+		image, _, err := s.Client.Fetch(keychain, ref.Context().Name()+"@"+report.Image.Digest)
+		if err != nil {
+			return "", nil, err
+		}
+
+		imageSize, err := image.Size()
+		if err != nil {
+			return "", nil, err
+		}
+
+		digestBytes, err := hex.DecodeString(strings.TrimPrefix(report.Image.Digest, "sha256:"))
+		if err != nil {
+			return "", nil, err
+		}
+
+		curGUN := data.GUN(ref.Context().Name())
+		if gun == "" {
+			gun = curGUN
+		} else if gun != curGUN {
+			return "", nil, errors.New("signing to multiple registries is not supported")
+		}
+
+		targets = append(targets, &client.Target{
+			Name: ref.Identifier(),
+			Hashes: map[string][]byte{
+				notary.SHA256: digestBytes,
+			},
+			Length: imageSize,
+		})
 	}
 
-	gun := data.GUN(ref.Context().Name())
+	return gun, targets, nil
+}
 
+func (s *ImageSigner) makeRemoteStore(url string, gun data.GUN) (storage.RemoteStore, error) {
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true, // TODO : need to supply ca certs in a config map
 		},
 	}
+	return storage.NewNotaryServerStore(url, gun, tr)
+}
 
-	remoteStore, err := storage.NewNotaryServerStore(serverURL, gun, tr)
-	if err != nil {
-		return err
-	}
-
-	clDir, err := ioutil.TempDir("", "")
-	if err != nil {
-		return err
-	}
-
-	cl, err := changelist.NewFileChangelist(clDir)
-	if err != nil {
-		return err
-	}
-
+func (s *ImageSigner) makeCryptoService(notarySecretDir string) (*cryptoservice.CryptoService, error) {
 	cryptoStore := storage.NewMemoryStore(nil)
 
 	fileInfos, err := ioutil.ReadDir(notarySecretDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
+	privateKeyFound := false
 	for _, info := range fileInfos {
 		if strings.HasSuffix(info.Name(), ".key") {
 			buf, err := ioutil.ReadFile(filepath.Join(notarySecretDir, info.Name()))
 			if err != nil {
-				return err
+				return nil, err
 			}
 
 			err = cryptoStore.Set(strings.TrimSuffix(info.Name(), ".key"), buf)
 			if err != nil {
-				return err
+				return nil, err
 			}
 
+			s.Logger.Printf("Usin private key '%s'\n", info.Name())
+			privateKeyFound = true
 			break
 		}
 	}
 
-	cryptoService := cryptoservice.NewCryptoService(trustmanager.NewGenericKeyStore(cryptoStore, k8sSecretPassRetriever(filepath.Join(notarySecretDir, "password"))))
-
-	localStore := storage.NewMemoryStore(nil)
-
-	repo, err := client.NewRepository(
-		gun,
-		serverURL,
-		remoteStore,
-		localStore,
-		trustpinning.TrustPinConfig{},
-		cryptoService,
-		cl,
-	)
-	if err != nil {
-		return err
+	if !privateKeyFound {
+		return nil, errors.New("failed to find private key")
 	}
 
-	err = repo.AddTarget(target, data.CanonicalTargetsRole)
-	if err != nil {
-		return err
-
-	}
-
-	return repo.Publish()
+	keyStore := trustmanager.NewGenericKeyStore(cryptoStore, k8sSecretPassRetriever(notarySecretDir))
+	return cryptoservice.NewCryptoService(keyStore), nil
 }
 
-func k8sSecretPassRetriever(passwordPath string) func(_, _ string, _ bool, _ int) (passphrase string, giveup bool, err error) {
+func k8sSecretPassRetriever(notarySecretDir string) func(_, _ string, _ bool, _ int) (passphrase string, giveup bool, err error) {
 	return func(_, _ string, _ bool, _ int) (passphrase string, giveup bool, err error) {
-		buf, err := ioutil.ReadFile(passwordPath)
+		buf, err := ioutil.ReadFile(filepath.Join(notarySecretDir, "password"))
 		return strings.TrimSpace(string(buf)), false, err
 	}
 }
