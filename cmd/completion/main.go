@@ -20,6 +20,7 @@ const (
 
 var (
 	notaryV1URL             string
+	caCertFilePath          string
 	dockerCredentials       flaghelpers.CredentialsFlags
 	dockerCfgCredentials    flaghelpers.CredentialsFlags
 	dockerConfigCredentials flaghelpers.CredentialsFlags
@@ -28,6 +29,7 @@ var (
 
 func init() {
 	flag.StringVar(&notaryV1URL, "notary-v1-url", "", "Notary V1 server url")
+	flag.StringVar(&caCertFilePath, "ca-cert", "", "CA certificate path")
 	flag.Var(&dockerCredentials, "basic-docker", "Basic authentication for docker of the form 'secretname=git.domain.com'")
 	flag.Var(&dockerCfgCredentials, "dockercfg", "Docker Cfg credentials in the form of the path to the credential")
 	flag.Var(&dockerConfigCredentials, "dockerconfig", "Docker Config JSON credentials in the form of the path to the credential")
@@ -63,10 +65,11 @@ func main() {
 		}
 
 		signer := notary.ImageSigner{
-			Logger: logger,
-			Client: registry.Client{},
+			Logger:  logger,
+			Client:  &registry.Client{},
+			Factory: &notary.RemoteRepositoryFactory{},
 		}
-		if err := signer.Sign(notaryV1URL, notarySecretDir, reportFilePath, creds); err != nil {
+		if err := signer.Sign(notaryV1URL, notarySecretDir, reportFilePath, caCertFilePath, creds); err != nil {
 			logger.Fatal(err)
 		}
 	}

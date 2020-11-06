@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
@@ -31,6 +32,7 @@ const (
 	builderPullSecretsDirName = "builder-pull-secrets-dir"
 	notaryDirName             = "notary-dir"
 	reportDirName             = "report-dir"
+	notaryCertsDirName        = "notary-certs-dir"
 )
 
 type BuildPodImages struct {
@@ -95,6 +97,11 @@ var (
 		Name:      reportDirName,
 		MountPath: "/var/report",
 		ReadOnly:  false,
+	}
+	notaryCertsVolume = corev1.VolumeMount{
+		Name:      notaryCertsDirName,
+		MountPath: "/var/notary/certs",
+		ReadOnly:  true,
 	}
 )
 
@@ -365,6 +372,7 @@ func (b *Build) BuildPod(config BuildPodImages, secrets []corev1.Secret, bc Buil
 				b.Spec.Source.Source().ImagePullSecretsVolume(),
 				builderSecretVolume(b.Spec.Builder),
 				b.notarySecretVolume(),
+				b.notaryCertsVolume(),
 			), bindingVolumes...),
 			ImagePullSecrets: b.Spec.Builder.ImagePullSecrets,
 		},
@@ -373,31 +381,35 @@ func (b *Build) BuildPod(config BuildPodImages, secrets []corev1.Secret, bc Buil
 
 func (b *Build) completionContainer(images BuildPodImages, secretArgs []string, secretVolumeMounts []corev1.VolumeMount) corev1.Container {
 	config := b.NotaryV1Config()
-	if config != nil {
-		return corev1.Container{
-			Name:  "completion",
-			Image: images.CompletionImage,
-			Args: append(
-				[]string{
-					"-notary-v1-url=" + config.URL,
-				},
-				secretArgs...,
-			),
-			Resources: b.Spec.Resources,
-			VolumeMounts: append(
-				secretVolumeMounts,
-				notaryV1Volume,
-				reportVolume,
-			),
-			ImagePullPolicy: corev1.PullIfNotPresent,
-		}
-	} else {
+	if config == nil {
 		return corev1.Container{
 			Name:            "completion",
 			Image:           images.CompletionImage,
 			ImagePullPolicy: corev1.PullIfNotPresent,
 			Resources:       b.Spec.Resources,
 		}
+	}
+
+	completionArgs := []string{"-notary-v1-url=" + config.URL}
+	if config.ConfigMapKeyRef != nil {
+		completionArgs = append(completionArgs, "-ca-cert="+path.Join(notaryCertsVolume.MountPath, config.ConfigMapKeyRef.Key))
+	}
+
+	return corev1.Container{
+		Name:  "completion",
+		Image: images.CompletionImage,
+		Args: append(
+			completionArgs,
+			secretArgs...,
+		),
+		Resources: b.Spec.Resources,
+		VolumeMounts: append(
+			secretVolumeMounts,
+			notaryV1Volume,
+			reportVolume,
+			notaryCertsVolume,
+		),
+		ImagePullPolicy: corev1.PullIfNotPresent,
 	}
 }
 
@@ -412,13 +424,36 @@ func (b *Build) notarySecretVolume() corev1.Volume {
 				},
 			},
 		}
-	} else {
+	}
+
+	return corev1.Volume{
+		Name: notaryDirName,
+		VolumeSource: corev1.VolumeSource{
+			EmptyDir: &corev1.EmptyDirVolumeSource{},
+		},
+	}
+}
+
+func (b *Build) notaryCertsVolume() corev1.Volume {
+	config := b.NotaryV1Config()
+	if config != nil && config.ConfigMapKeyRef != nil {
 		return corev1.Volume{
-			Name: notaryDirName,
+			Name: notaryCertsDirName,
 			VolumeSource: corev1.VolumeSource{
-				EmptyDir: &corev1.EmptyDirVolumeSource{},
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: config.ConfigMapKeyRef.Name,
+					},
+				},
 			},
 		}
+	}
+
+	return corev1.Volume{
+		Name: notaryCertsDirName,
+		VolumeSource: corev1.VolumeSource{
+			EmptyDir: &corev1.EmptyDirVolumeSource{},
+		},
 	}
 }
 
