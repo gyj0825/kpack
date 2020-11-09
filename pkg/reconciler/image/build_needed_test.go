@@ -143,12 +143,10 @@ func testImageBuilds(t *testing.T, when spec.G, it spec.S) {
 		})
 
 		it("true if build bindings changes", func() {
-			latestBuild.Spec.Bindings = v1alpha1.Bindings{
+			latestBuild.Spec.Services = v1alpha1.Services{
 				{
 					Name: "some-old-value",
-					MetadataRef: &corev1.LocalObjectReference{
-						Name: "some-old-config-map",
-					},
+					Kind: "Secret",
 				},
 			}
 

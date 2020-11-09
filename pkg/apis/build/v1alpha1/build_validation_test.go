@@ -6,7 +6,6 @@ import (
 
 	"github.com/sclevine/spec"
 	"github.com/stretchr/testify/assert"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"knative.dev/pkg/apis"
 )
@@ -146,68 +145,47 @@ func testBuildValidation(t *testing.T, when spec.G, it spec.S) {
 			assertValidationError(build, apis.ErrInvalidValue(build.Spec.LastBuild.Image, "image").ViaField("spec", "lastBuild"))
 		})
 
-		it("validates bindings have a name", func() {
-			build.Spec.Bindings = []Binding{
-				{MetadataRef: &corev1.LocalObjectReference{Name: "metadata"}},
+		it("validates services have a name", func() {
+			build.Spec.Services = []Service{
+				{Kind: "Secret"},
 			}
 
-			assertValidationError(build, apis.ErrMissingField("spec.bindings[0].name"))
+			assertValidationError(build, apis.ErrMissingField("spec.services[0].name"))
 		})
 
-		it("validates bindings have a valid name", func() {
-			build.Spec.Bindings = []Binding{
-				{Name: "&", MetadataRef: &corev1.LocalObjectReference{Name: "metadata"}},
+		it("validates services have a valid name", func() {
+			build.Spec.Services = []Service{
+				{Name: "&", Kind: "Secret"},
 			}
 
-			assertValidationError(build, apis.ErrInvalidValue("&", "spec.bindings[0].name"))
+			assertValidationError(build, apis.ErrInvalidValue("&", "spec.services[0].name"))
 		})
 
-		it("validates bindings have metadata", func() {
-			build.Spec.Bindings = []Binding{
-				{Name: "apm"},
+		it("validates services have a valid kind", func() {
+			build.Spec.Services = []Service{
+				{Name: "other-apm", Kind: "invalid"},
 			}
 
-			assertValidationError(build, apis.ErrMissingField("spec.bindings[0].metadataRef"))
+			assertValidationError(build, apis.ErrInvalidValue("invalid", "spec.services[0].kind"))
 		})
 
-		it("validates bindings have non-empty metadata", func() {
-			build.Spec.Bindings = []Binding{
-				{Name: "apm", MetadataRef: &corev1.LocalObjectReference{}},
-			}
-
-			assertValidationError(build, apis.ErrMissingField("spec.bindings[0].metadataRef.name"))
-		})
-
-		it("validates bindings have non-empty secrets", func() {
-			build.Spec.Bindings = []Binding{
+		it("validates services name uniqueness", func() {
+			build.Spec.Services = []Service{
 				{
-					Name:        "apm",
-					MetadataRef: &corev1.LocalObjectReference{Name: "metadata"},
-					SecretRef:   &corev1.LocalObjectReference{},
+					Name: "apm",
+					Kind: "Secret",
+				},
+				{
+					Name: "not-apm",
+					Kind: "Secret",
+				},
+				{
+					Name: "apm",
+					Kind: "Secret",
 				},
 			}
 
-			assertValidationError(build, apis.ErrMissingField("spec.bindings[0].secretRef.name"))
-		})
-
-		it("validates bindings name uniqueness", func() {
-			build.Spec.Bindings = []Binding{
-				{
-					Name:        "apm",
-					MetadataRef: &corev1.LocalObjectReference{Name: "metadata"},
-				},
-				{
-					Name:        "not-apm",
-					MetadataRef: &corev1.LocalObjectReference{Name: "metadata"},
-					SecretRef:   &corev1.LocalObjectReference{Name: "secret"},
-				},
-				{
-					Name:        "apm",
-					MetadataRef: &corev1.LocalObjectReference{Name: "metadata"},
-				},
-			}
-
-			assertValidationError(build, apis.ErrGeneric("duplicate binding name \"apm\"", "spec.bindings[0].name", "spec.bindings[2].name"))
+			assertValidationError(build, apis.ErrGeneric("duplicate service name \"apm\"", "spec.services[0].name", "spec.services[2].name"))
 		})
 
 		it("combining errors", func() {

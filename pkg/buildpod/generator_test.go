@@ -197,17 +197,16 @@ func testGenerator(t *testing.T, when spec.G, it spec.S) {
 
 			var build = &testBuildPodable{
 				namespace: namespace,
-				bindings: []v1alpha1.Binding{
+				services: []v1alpha1.Service{
 					{
-						Name:        "naughty",
-						MetadataRef: &corev1.LocalObjectReference{Name: "binding-configmap"},
-						SecretRef:   &corev1.LocalObjectReference{Name: dockerSecret.Name},
+						Name: dockerSecret.Name,
+						Kind: "Secret",
 					},
 				},
 			}
 
 			pod, err := generator.Generate(build)
-			require.EqualError(t, err, fmt.Sprintf("build rejected: binding %q uses forbidden secret %q", "naughty", dockerSecret.Name))
+			require.EqualError(t, err, fmt.Sprintf("build rejected: service %q uses forbidden secret %q", dockerSecret.Name, dockerSecret.Name))
 			require.Nil(t, pod)
 		})
 	})
@@ -224,7 +223,7 @@ type testBuildPodable struct {
 	serviceAccount   string
 	namespace        string
 	buildPodCalls    []buildPodCall
-	bindings         []v1alpha1.Binding
+	services         []v1alpha1.Service
 }
 
 type buildPodCall struct {
@@ -258,6 +257,6 @@ func (tb *testBuildPodable) BuildPod(images v1alpha1.BuildPodImages, secrets []c
 	return &corev1.Pod{}, nil
 }
 
-func (tb *testBuildPodable) Bindings() []v1alpha1.Binding {
-	return tb.bindings
+func (tb *testBuildPodable) Services() []v1alpha1.Service {
+	return tb.services
 }

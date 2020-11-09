@@ -68,21 +68,14 @@ func testBuildPod(t *testing.T, when spec.G, it spec.S) {
 				},
 			},
 			CacheName: "some-cache-name",
-			Bindings: []v1alpha1.Binding{
+			Services: []v1alpha1.Service{
 				{
 					Name: "database",
-					MetadataRef: &corev1.LocalObjectReference{
-						Name: "database-configmap",
-					},
+					Kind: "Secret",
 				},
 				{
 					Name: "apm",
-					MetadataRef: &corev1.LocalObjectReference{
-						Name: "apm-configmap",
-					},
-					SecretRef: &corev1.LocalObjectReference{
-						Name: "apm-secret",
-					},
+					Kind: "Secret",
 				},
 			},
 			Env: []corev1.EnvVar{
@@ -248,37 +241,25 @@ func testBuildPod(t *testing.T, when spec.G, it spec.S) {
 				}
 			})
 
-			it("configures the bindings", func() {
+			it("configures the service bindings", func() {
 				pod, err := build.BuildPod(config, secrets, buildPodBuilderConfig)
 				require.NoError(t, err)
 
 				assert.Contains(t,
 					pod.Spec.Volumes,
 					corev1.Volume{
-						Name: "binding-metadata-database",
-						VolumeSource: corev1.VolumeSource{
-							ConfigMap: &corev1.ConfigMapVolumeSource{
-								LocalObjectReference: corev1.LocalObjectReference{
-									Name: "database-configmap",
-								},
-							},
-						},
-					},
-					corev1.Volume{
-						Name: "binding-metadata-apm",
-						VolumeSource: corev1.VolumeSource{
-							ConfigMap: &corev1.ConfigMapVolumeSource{
-								LocalObjectReference: corev1.LocalObjectReference{
-									Name: "apm-configmap",
-								},
-							},
-						},
-					},
-					corev1.Volume{
-						Name: "binding-secret-apm",
+						Name: "service-binding-secret-database",
 						VolumeSource: corev1.VolumeSource{
 							Secret: &corev1.SecretVolumeSource{
-								SecretName: "apm-secret",
+								SecretName: "database",
+							},
+						},
+					},
+					corev1.Volume{
+						Name: "service-binding-secret-apm",
+						VolumeSource: corev1.VolumeSource{
+							Secret: &corev1.SecretVolumeSource{
+								SecretName: "apm",
 							},
 						},
 					},
@@ -288,19 +269,21 @@ func testBuildPod(t *testing.T, when spec.G, it spec.S) {
 					assert.Contains(t,
 						pod.Spec.InitContainers[containerIdx].VolumeMounts,
 						corev1.VolumeMount{
-							Name:      "binding-metadata-database",
-							MountPath: "/platform/bindings/database/metadata",
+							Name:      "service-binding-secret-database",
+							MountPath: "/platform/bindings/database",
 							ReadOnly:  true,
 						},
 						corev1.VolumeMount{
-							Name:      "binding-metadata-apm",
-							MountPath: "/platform/bindings/apm/metadata",
+							Name:      "service-binding-secret-apm",
+							MountPath: "/platform/bindings/apm",
 							ReadOnly:  true,
 						},
-						corev1.VolumeMount{
-							Name:      "binding-secret-apm",
-							MountPath: "/platform/bindings/apm/secret",
-							ReadOnly:  true,
+					)
+					assert.Contains(t,
+						pod.Spec.InitContainers[containerIdx].Env,
+						corev1.EnvVar{
+							Name:  "SERVICE_BINDING_ROOT",
+							Value: "/platform/bindings",
 						},
 					)
 				}
@@ -504,9 +487,8 @@ func testBuildPod(t *testing.T, when spec.G, it spec.S) {
 					"layers-dir",
 					"platform-dir",
 					"workspace-dir",
-					"binding-metadata-database",
-					"binding-metadata-apm",
-					"binding-secret-apm",
+					"service-binding-secret-database",
+					"service-binding-secret-apm",
 				}, names(pod.Spec.InitContainers[1].VolumeMounts))
 			})
 
@@ -591,9 +573,8 @@ func testBuildPod(t *testing.T, when spec.G, it spec.S) {
 					"layers-dir",
 					"platform-dir",
 					"workspace-dir",
-					"binding-metadata-database",
-					"binding-metadata-apm",
-					"binding-secret-apm",
+					"service-binding-secret-database",
+					"service-binding-secret-apm",
 				}))
 			})
 
@@ -644,7 +625,7 @@ func testBuildPod(t *testing.T, when spec.G, it spec.S) {
 				pod, err := build.BuildPod(config, nil, buildPodBuilderConfig)
 				require.NoError(t, err)
 
-				require.Len(t, pod.Spec.Volumes, 10)
+				require.Len(t, pod.Spec.Volumes, 9)
 				assert.Equal(t, corev1.Volume{
 					Name: "cache-dir",
 					VolumeSource: corev1.VolumeSource{
@@ -658,7 +639,7 @@ func testBuildPod(t *testing.T, when spec.G, it spec.S) {
 				pod, err := build.BuildPod(config, nil, buildPodBuilderConfig)
 				require.NoError(t, err)
 
-				require.Len(t, pod.Spec.Volumes, 10)
+				require.Len(t, pod.Spec.Volumes, 9)
 				assert.Equal(t, corev1.Volume{
 					Name: "cache-dir",
 					VolumeSource: corev1.VolumeSource{

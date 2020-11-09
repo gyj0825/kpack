@@ -216,12 +216,12 @@ func testImageValidation(t *testing.T, when spec.G, it spec.S) {
 			assertValidationError(image, ctx, apis.ErrInvalidValue(image.Spec.Source.Registry.Image, "image").ViaField("spec", "source", "registry"))
 		})
 
-		it("validates build bindings", func() {
-			image.Spec.Build.Bindings = []Binding{
-				{MetadataRef: &corev1.LocalObjectReference{Name: "metadata"}},
+		it("validates build services", func() {
+			image.Spec.Build.Services = []Service{
+				{Kind: "Secret"},
 			}
 
-			assertValidationError(image, ctx, apis.ErrMissingField("spec.build.bindings[0].name"))
+			assertValidationError(image, ctx, apis.ErrMissingField("spec.build.services[0].name"))
 		})
 
 		it("validates cache size is not set when there is no default StorageClass", func() {
